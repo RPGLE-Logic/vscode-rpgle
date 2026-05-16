@@ -99,31 +99,43 @@ enum ResolvedState {
 };
 
 let boundLintConfig: {[workingUri: string]: {resolved: ResolvedState, uri: string}} = {};
+const ignoredLibraries = (process.env.LINT_IGNORE_LIBRARIES || ``)
+	.split(`;`)
+	.map(lib => lib.trim().toUpperCase())
+	.filter(Boolean);
+
+function shouldLintUri(uri: string) {
+	const parsed = URI.parse(uri);
+	if (parsed.scheme !== `member`) return true;
+
+	const memberPath = parseMemberUri(parsed.path);
+	return !(memberPath.library && ignoredLibraries.includes(memberPath.library.toUpperCase()));
+}
 
 export async function getLintConfigUri(workingUri: string) {
-        const uri = URI.parse(workingUri);
-        let cleanString: string | undefined;
+	const uri = URI.parse(workingUri);
+	let cleanString: string | undefined;
 
-        const cached = boundLintConfig[workingUri];
+	const cached = boundLintConfig[workingUri];
 
-        if (cached) {
-                return cached.resolved === ResolvedState.Found ? cached.uri : undefined;
-        }
+	if (cached) {
+		return cached.resolved === ResolvedState.Found ? cached.uri : undefined;
+	}
 
-        if (uri.scheme === `member`) {
-                const globalPath = process.env.GLOBAL_LINT_CONFIG_PATH;
-                if (globalPath) {
-                        cleanString = URI.from({ scheme: `member`, path: globalPath }).toString();
-                        cleanString = await validateUri(cleanString, `member`);
-                        if (cleanString) {
-                                boundLintConfig[workingUri] = {
-                                        resolved: ResolvedState.Found,
-                                        uri: cleanString
-                                };
-                                return cleanString;
-                        }
-                }
-        }
+	if (uri.scheme === `member`) {
+		const globalPath = process.env.GLOBAL_LINT_CONFIG_PATH;
+		if (globalPath) {
+			cleanString = URI.from({ scheme: `member`, path: globalPath }).toString();
+			cleanString = await validateUri(cleanString, `member`);
+			if (cleanString) {
+				boundLintConfig[workingUri] = {
+					resolved: ResolvedState.Found,
+					uri: cleanString
+				};
+				return cleanString;
+			}
+		}
+	}
 
 	switch (uri.scheme) {
 		case `member`:
@@ -203,6 +215,13 @@ export async function getLintOptions(workingUri: string): Promise<Rules> {
 const hintDiagnositcs: (keyof Rules)[] = [`SQLRunner`, `StringLiteralDupe`]
 
 export async function refreshLinterDiagnostics(document: TextDocument, docs: Cache, updateDiagnostics = true) {
+	if (!shouldLintUri(document.uri)) {
+		if (updateDiagnostics) {
+			connection.sendDiagnostics({ uri: document.uri, diagnostics: [] });
+		}
+		return;
+	}
+
 	const isFree = (document.getText(Range.create(0, 0, 0, 6)).toUpperCase() === `**FREE`);
 	if (isFree) {
 		const text = document.getText();
